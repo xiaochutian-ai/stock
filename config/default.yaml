@@ -1,0 +1,67 @@
+# A 股选股系统默认配置
+# 所有字段都可在运行时通过 CLI 参数或环境变量覆盖
+
+# 数据源配置（面向接口，通过 name 选择实现）
+datasource:
+  name: akshare            # 可选: akshare / tushare / baostock
+  options:
+    # akshare 无需 token
+    # tushare 需要 token: token: "your_token_here"
+    timeout: 30
+    retry: 3
+    cache_dir: "./data/cache"
+
+# 存储层配置（面向接口，通过 name 选择实现）
+storage:
+  name: sqlite             # 可选: sqlite / mysql / postgres
+  options:
+    url: "sqlite:///./data/astock.db"
+    echo: false            # SQLAlchemy 是否打印 SQL
+
+# 选股策略配置（插件式，可组合）
+# 每个策略独立权重，最终按 multi_factor 综合打分排序
+strategies:
+  - name: technical        # 技术面策略
+    enabled: true
+    weight: 0.4
+    params:
+      ma_bull: true        # 均线多头排列
+      macd_gold_cross: true  # MACD 金叉
+      rsi_range: [30, 70]  # RSI 区间
+
+  - name: fundamental      # 基本面策略
+    enabled: true
+    weight: 0.3
+    params:
+      pe_max: 50           # PE 上限
+      pb_max: 10           # PB 上限
+      roe_min: 0.10        # ROE 下限 10%
+
+  - name: money_flow       # 资金面策略
+    enabled: true
+    weight: 0.3
+    params:
+      main_inflow_days: 3  # 连续 N 日主力净流入
+      min_inflow_amount: 1000000  # 最小净流入金额（元）
+
+# 选股目标市场
+market:
+  boards:                  # 板块范围
+    - main_board           # 主板
+    - sme_board            # 中小板
+    # - chinext            # 创业板
+    # - star_market        # 科创板
+  exclude_st: true         # 排除 ST 股
+  exclude_new_stock_days: 60  # 排除次新股（上市天数 < N）
+
+# 输出配置
+output:
+  format: console          # console / csv / excel / json
+  top_n: 50                # 输出前 N 名
+  min_score: 0.5           # 综合加权得分下限（0~1）
+  path: "./data/output"
+
+# 日志
+logging:
+  level: INFO
+  file: "./data/logs/astock.log"
