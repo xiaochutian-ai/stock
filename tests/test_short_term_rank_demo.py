@@ -24,8 +24,16 @@ def test_rank_candidates_orders_by_total_score():
     results = scorer.rank_candidates(market, sectors, stocks)
 
     assert len(results) == 6
+    assert len(sectors) == 3
     assert results[0].total_score >= results[1].total_score >= results[2].total_score
-    assert results[0].tag in {"重点关注", "观察池"}
+    assert [item.rank for item in results] == [1, 2, 3, 4, 5, 6]
+    assert results[0].tag == "重点关注"
+    assert results[0].market_score >= 0
+    assert results[0].sector_score >= 0
+    assert results[0].trend_score >= 0
+    assert results[0].flow_score >= 0
+    assert results[0].risk_score >= 0
+    assert results[0].reasons
 
 
 def test_rank_candidates_assigns_expected_tags():
@@ -38,6 +46,16 @@ def test_rank_candidates_assigns_expected_tags():
     assert any(item.tag == "重点关注" for item in results)
     assert any(item.tag == "观察池" for item in results)
     assert any(item.tag == "暂不推荐" for item in results)
+
+
+def test_build_sample_dataset_matches_approved_design_shape():
+    demo = _load_demo_module()
+    market, sectors, stocks = demo.build_sample_dataset()
+
+    assert isinstance(market, demo.MarketSnapshot)
+    assert len(sectors) == 3
+    assert len(stocks) == 6
+    assert {sector.name for sector in sectors} == {"AI算力", "机器人", "金融科技"}
 
 
 def test_rank_candidates_returns_empty_for_no_stocks():
@@ -90,6 +108,14 @@ def test_main_prints_ranked_candidates(capsys):
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "短线候选股排序 Demo" in captured.out
-    assert "代码" in captured.out
-    assert "重点关注" in captured.out
+    assert "市场环境摘要" in captured.out
+    assert "候选榜单" in captured.out
+    assert "Top 3 明细" in captured.out
+    assert "Total" in captured.out
+    assert "Market" in captured.out
+    assert "Sector" in captured.out
+    assert "Trend" in captured.out
+    assert "Flow" in captured.out
+    assert "Risk" in captured.out
+    assert "reason" in captured.out
+    assert "风险提醒" in captured.out
