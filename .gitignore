@@ -211,6 +211,7 @@ config/*.local.yaml
 *.bak
 _scratch/
 _patch_*.py
+.worktrees/
 
 # 敏感信息 / 密钥（防止意外入库）
 *.pem
