@@ -1,6 +1,8 @@
-from pathlib import Path
 import importlib.util
 import sys
+import unicodedata
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -105,6 +107,77 @@ def test_rank_candidates_rejects_unknown_sector():
 
     with pytest.raises(ValueError, match="不存在的板块"):
         scorer.rank_candidates(market, sectors, stocks + [broken])
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width
+
+
+def test_custom_weights_are_normalized_without_distorting_scores_or_tags():
+    demo = _load_demo_module()
+    market, sectors, stocks = demo.build_sample_dataset()
+    default_scorer = demo.ShortTermScorer()
+    scaled_scorer = demo.ShortTermScorer(
+        market_weight=20,
+        sector_weight=25,
+        trend_weight=25,
+        flow_weight=20,
+        risk_weight=10,
+    )
+
+    default_results = default_scorer.rank_candidates(market, sectors, stocks)
+    scaled_results = scaled_scorer.rank_candidates(market, sectors, stocks)
+
+    assert pytest.approx(
+        scaled_scorer.market_weight
+        + scaled_scorer.sector_weight
+        + scaled_scorer.trend_weight
+        + scaled_scorer.flow_weight
+        + scaled_scorer.risk_weight
+    ) == 1.0
+    assert [item.total_score for item in scaled_results] == [
+        item.total_score for item in default_results
+    ]
+    assert [item.tag for item in scaled_results] == [item.tag for item in default_results]
+
+
+def test_rank_candidates_allows_negative_strong_stock_premium_for_weak_market():
+    demo = _load_demo_module()
+    market, sectors, stocks = demo.build_sample_dataset()
+    scorer = demo.ShortTermScorer()
+    weak_market = replace(market, strong_stock_premium=-1.5)
+
+    results = scorer.rank_candidates(weak_market, sectors, stocks)
+    market_score, reasons = scorer.score_market(weak_market)
+
+    assert len(results) == len(stocks)
+    assert market_score == 80
+    assert "强势股平均溢价达标" not in reasons
+    assert all(item.market_score == 80 for item in results)
+
+
+def test_print_ranking_table_aligns_columns_for_cjk_content(capsys):
+    demo = _load_demo_module()
+    market, sectors, stocks = demo.build_sample_dataset()
+    scorer = demo.ShortTermScorer()
+    results = scorer.rank_candidates(market, sectors, stocks)
+
+    demo.print_ranking_table(results[:4])
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    data_lines = lines[3:]
+
+    reason_offsets = []
+    for item, line in zip(results[:4], data_lines):
+        reason_text = "、".join(item.reasons)
+        reason_offsets.append(_display_width(line[: line.index(reason_text)]))
+
+    assert len(set(reason_offsets)) == 1
 
 
 def test_main_prints_ranked_candidates(capsys):

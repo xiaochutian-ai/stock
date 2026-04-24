@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
+import unicodedata
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,7 @@ def _validate_non_negative(name: str, value: float) -> None:
         raise ValueError(f"{name} 不能为负数，实际为 {value}")
 
 
-def _validate_weights(weights: Sequence[Tuple[str, float]]) -> None:
+def _validate_weights(weights: Sequence[Tuple[str, float]]) -> float:
     total = 0.0
     for name, value in weights:
         if value < 0:
@@ -89,13 +90,18 @@ def _validate_weights(weights: Sequence[Tuple[str, float]]) -> None:
         total += value
     if total <= 0:
         raise ValueError("权重总和必须大于 0")
+    return total
+
+
+def _normalize_weights(weights: Sequence[Tuple[str, float]]) -> Tuple[float, ...]:
+    total = _validate_weights(weights)
+    return tuple(value / total for _, value in weights)
 
 
 def _validate_market_snapshot(market: MarketSnapshot) -> None:
     _validate_ratio("advancers_ratio", market.advancers_ratio)
     _validate_non_negative("limit_up_count", market.limit_up_count)
     _validate_non_negative("limit_down_count", market.limit_down_count)
-    _validate_non_negative("strong_stock_premium", market.strong_stock_premium)
 
 
 def _validate_sector_snapshot(sector: SectorSnapshot) -> None:
@@ -130,6 +136,23 @@ def _score_tag(total_score: float) -> str:
     return "暂不推荐"
 
 
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width
+
+
+def _pad_display(text: str, width: int, align: str = "left") -> str:
+    padding = max(0, width - _display_width(text))
+    spaces = " " * padding
+    if align == "right":
+        return spaces + text
+    return text + spaces
+
+
 class ShortTermScorer:
     def __init__(
         self,
@@ -139,20 +162,21 @@ class ShortTermScorer:
         flow_weight: float = 0.20,
         risk_weight: float = 0.10,
     ) -> None:
-        _validate_weights(
-            [
+        (
+            self.market_weight,
+            self.sector_weight,
+            self.trend_weight,
+            self.flow_weight,
+            self.risk_weight,
+        ) = _normalize_weights(
+            (
                 ("market_weight", market_weight),
                 ("sector_weight", sector_weight),
                 ("trend_weight", trend_weight),
                 ("flow_weight", flow_weight),
                 ("risk_weight", risk_weight),
-            ]
+            )
         )
-        self.market_weight = market_weight
-        self.sector_weight = sector_weight
-        self.trend_weight = trend_weight
-        self.flow_weight = flow_weight
-        self.risk_weight = risk_weight
 
     def score_market(self, market: MarketSnapshot) -> Tuple[float, List[str]]:
         score = 0.0
@@ -510,19 +534,51 @@ def print_ranking_table(results: Sequence[ScoreBreakdown]) -> None:
         print()
         return
 
-    header = (
-        f"{'Rank':<4} {'Code':<8} {'Name':<10} {'Sector':<8} {'Total':>6} "
-        f"{'Market':>6} {'Sector':>6} {'Trend':>6} {'Flow':>6} {'Risk':>6} {'Tag':<6} reason"
-    )
+    rows = [
+        {
+            "Rank": str(item.rank),
+            "Code": item.code,
+            "Name": item.name,
+            "Sector": item.sector,
+            "Total": f"{item.total_score:.2f}",
+            "Market": f"{item.market_score:.0f}",
+            "SectorScore": f"{item.sector_score:.0f}",
+            "Trend": f"{item.trend_score:.0f}",
+            "Flow": f"{item.flow_score:.0f}",
+            "Risk": f"{item.risk_score:.0f}",
+            "Tag": item.tag,
+            "reason": "、".join(item.reasons),
+        }
+        for item in results
+    ]
+    columns = [
+        ("Rank", "Rank", "right"),
+        ("Code", "Code", "left"),
+        ("Name", "Name", "left"),
+        ("Sector", "Sector", "left"),
+        ("Total", "Total", "right"),
+        ("Market", "Market", "right"),
+        ("SectorScore", "Sector", "right"),
+        ("Trend", "Trend", "right"),
+        ("Flow", "Flow", "right"),
+        ("Risk", "Risk", "right"),
+        ("Tag", "Tag", "left"),
+    ]
+    widths = {
+        key: max(_display_width(header_text), *(_display_width(row[key]) for row in rows))
+        for key, header_text, _ in columns
+    }
+    header = " ".join(
+        _pad_display(header_text, widths[key], align)
+        for key, header_text, align in columns
+    ) + " reason"
     print(header)
-    print("-" * len(header))
-    for item in results:
-        print(
-            f"{item.rank:<4} {item.code:<8} {item.name:<10} {item.sector:<8} "
-            f"{item.total_score:>6.2f} {item.market_score:>6.0f} {item.sector_score:>6.0f} "
-            f"{item.trend_score:>6.0f} {item.flow_score:>6.0f} {item.risk_score:>6.0f} "
-            f"{item.tag:<6} {'、'.join(item.reasons)}"
+    print("-" * _display_width(header))
+    for row in rows:
+        line = " ".join(
+            _pad_display(row[key], widths[key], align) for key, _, align in columns
         )
+        print(f"{line} {row['reason']}")
     print()
 
 
