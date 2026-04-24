@@ -343,7 +343,7 @@ def build_sample_dataset() -> Tuple[MarketSnapshot, List[SectorSnapshot], List[S
     sectors = [
         SectorSnapshot("AI算力", 0.03, 0.04, 0.78, 3, True),
         SectorSnapshot("机器人", 0.06, 0.08, 0.72, 2, True),
-        SectorSnapshot("金融科技", 0.09, 0.12, 0.71, 1, False),
+        SectorSnapshot("金融科技", 0.22, 0.18, 0.58, 1, False),
     ]
     stocks = [
         StockCandidate(

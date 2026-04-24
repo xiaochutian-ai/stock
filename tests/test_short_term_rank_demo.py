@@ -44,8 +44,8 @@ def test_rank_candidates_assigns_expected_tags():
     results = scorer.rank_candidates(market, sectors, stocks)
 
     assert any(item.tag == "重点关注" for item in results)
-    assert any(item.tag == "观察池" for item in results)
     assert any(item.tag == "暂不推荐" for item in results)
+    assert not any(item.tag == "观察池" for item in results)
 
 
 def test_build_sample_dataset_matches_approved_design_shape():
@@ -56,6 +56,12 @@ def test_build_sample_dataset_matches_approved_design_shape():
     assert len(sectors) == 3
     assert len(stocks) == 6
     assert {sector.name for sector in sectors} == {"AI算力", "机器人", "金融科技"}
+    fintech_sector = next(sector for sector in sectors if sector.name == "金融科技")
+    assert fintech_sector.change_1d_rank_pct == 0.22
+    assert fintech_sector.change_3d_rank_pct == 0.18
+    assert fintech_sector.up_stock_ratio == 0.58
+    assert fintech_sector.limit_up_count == 1
+    assert fintech_sector.has_catalyst is False
 
 
 def test_rank_candidates_returns_empty_for_no_stocks():
