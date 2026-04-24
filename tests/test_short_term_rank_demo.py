@@ -1,5 +1,6 @@
 from pathlib import Path
 import importlib.util
+import sys
 
 import pytest
 
@@ -10,6 +11,7 @@ def _load_demo_module():
     spec = importlib.util.spec_from_file_location("short_term_rank_demo", file_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -79,3 +81,15 @@ def test_rank_candidates_rejects_unknown_sector():
 
     with pytest.raises(ValueError, match="不存在的板块"):
         scorer.rank_candidates(market, sectors, stocks + [broken])
+
+
+def test_main_prints_ranked_candidates(capsys):
+    demo = _load_demo_module()
+
+    exit_code = demo.main()
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "短线候选股排序 Demo" in captured.out
+    assert "代码" in captured.out
+    assert "重点关注" in captured.out
