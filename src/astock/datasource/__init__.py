@@ -12,6 +12,7 @@ from .registry import get_provider, register_provider, list_providers
 
 # 触发实现注册（import 即注册）
 from . import akshare_provider  # noqa: F401
+from . import baostock_provider  # noqa: F401
 
 __all__ = [
     "DataProvider",
