@@ -40,12 +40,29 @@ class AkshareProvider(DataProvider):
     def list_stocks(self) -> List[Stock]:
         """获取 A 股股票列表。
 
-        akshare.stock_info_a_code_name() 返回: code, name
-        为提高信息密度，再合并上市日期。
+        分别从上交所和深交所接口拉取股票列表，再在本地拼接。
         """
-        df = self._call(self._ak.stock_info_a_code_name)
-        if df is None or df.empty:
+        sh_df = self._call(self._ak.stock_info_sh_name_code, symbol="主板A股")
+        sz_df = self._call(self._ak.stock_info_sz_name_code, symbol="A股列表")
+
+        frames = []
+        if sh_df is not None and not sh_df.empty:
+            frames.append(
+                sh_df.loc[:, ["证券代码", "证券简称"]].rename(
+                    columns={"证券代码": "code", "证券简称": "name"}
+                )
+            )
+        if sz_df is not None and not sz_df.empty:
+            frames.append(
+                sz_df.loc[:, ["A股代码", "A股简称"]].rename(
+                    columns={"A股代码": "code", "A股简称": "name"}
+                )
+            )
+
+        if not frames:
             return []
+
+        df = pd.concat(frames, ignore_index=True)
 
         stocks: List[Stock] = []
         for _, row in df.iterrows():
@@ -63,6 +80,10 @@ class AkshareProvider(DataProvider):
                 )
             )
         logger.info("akshare: 拉取到 %d 只股票", len(stocks))
+        # stocks的详情写入到文件中
+        with open("akshare_stocks.txt", "w", encoding="utf-8") as f:
+            for s in stocks:
+                f.write(f"{s.code}\t{s.name}\t{s.board.value}\t{s.is_st}\n")
         return stocks
 
     # ---------------- K 线 ----------------

@@ -234,7 +234,7 @@ class ScreeningEngine:
             filtered.append(s)
 
         logger.info(
-            "股票池过滤: 原始 %d, 过滤后 %d (boards=%s, st=%s)",
+            "股票池过滤: 原始 %d,  %d (boards=%s, st=%s)",
             len(stocks), len(filtered), boards or "ALL", exclude_st,
         )
         if limit and limit > 0:

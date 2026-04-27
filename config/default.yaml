@@ -21,13 +21,13 @@ storage:
 # 选股策略配置（插件式，可组合）
 # 每个策略独立权重，最终按 multi_factor 综合打分排序
 strategies:
-  - name: technical        # 技术面策略
-    enabled: true
-    weight: 0.4
-    params:
-      ma_bull: true        # 均线多头排列
-      macd_gold_cross: true  # MACD 金叉
-      rsi_range: [30, 70]  # RSI 区间
+  # - name: technical        # 技术面策略
+  #   enabled: true
+  #   weight: 0.4
+  #   params:
+  #     ma_bull: true        # 均线多头排列
+  #     macd_gold_cross: true  # MACD 金叉
+  #     rsi_range: [30, 70]  # RSI 区间
 
   - name: fundamental      # 基本面策略
     enabled: true
@@ -37,12 +37,12 @@ strategies:
       pb_max: 10           # PB 上限
       roe_min: 0.10        # ROE 下限 10%
 
-  - name: money_flow       # 资金面策略
-    enabled: true
-    weight: 0.3
-    params:
-      main_inflow_days: 3  # 连续 N 日主力净流入
-      min_inflow_amount: 1000000  # 最小净流入金额（元）
+  # - name: money_flow       # 资金面策略
+  #   enabled: true
+  #   weight: 0.3
+  #   params:
+  #     main_inflow_days: 3  # 连续 N 日主力净流入
+  #     min_inflow_amount: 1000000  # 最小净流入金额（元）
 
 # 选股目标市场
 market:
