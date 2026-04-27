@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -22,17 +22,26 @@ class WebMockProvider(DataProvider):
         ]
 
     def get_kline(self, code, start=None, end=None, adjust="qfq"):
-        index = pd.date_range(end="2026-04-27", periods=5, freq="B")
+        _ = adjust
+        end_date = end or date(2026, 4, 27)
+        start_date = start or (end_date - timedelta(days=240))
+        index = pd.date_range(start=start_date, end=end_date, freq="B")
+        if len(index) == 0:
+            index = pd.DatetimeIndex([pd.Timestamp(end_date)])
+        periods = len(index)
+        close = [10.0 + i * 0.2 for i in range(periods)]
         df = pd.DataFrame(
             {
-                "open": [10, 11, 12, 13, 14],
-                "high": [10.5, 11.5, 12.5, 13.5, 14.5],
-                "low": [9.5, 10.5, 11.5, 12.5, 13.5],
-                "close": [10, 11, 12, 13, 14],
-                "volume": [1000, 1100, 1200, 1300, 1400],
-                "amount": [10000, 12100, 14400, 16900, 19600],
-                "pct_change": [0.0, 10.0, 9.0, 8.0, 7.0],
-                "turnover_rate": [1.0, 1.1, 1.2, 1.3, 1.4],
+                "open": [price - 0.1 for price in close],
+                "high": [price + 0.3 for price in close],
+                "low": [price - 0.3 for price in close],
+                "close": close,
+                "volume": [1000 + i * 100 for i in range(periods)],
+                "amount": [price * (1000 + i * 100) for i, price in enumerate(close)],
+                "pct_change": [0.0] + [
+                    (close[i] - close[i - 1]) / close[i - 1] * 100 for i in range(1, periods)
+                ],
+                "turnover_rate": [1.0 + i * 0.05 for i in range(periods)],
             },
             index=index,
         )
@@ -46,10 +55,14 @@ class WebMockProvider(DataProvider):
         return [Financial(code=code, pe_ttm=20.0, pb=2.0, roe=0.15) for code in codes]
 
     def get_money_flow(self, code: str, days: int = 5):
+        end_date = date(2026, 4, 27)
         return [
-            MoneyFlow(code=code, trade_date=date(2026, 4, 25), main_net_inflow=1_000_000),
-            MoneyFlow(code=code, trade_date=date(2026, 4, 26), main_net_inflow=1_500_000),
-            MoneyFlow(code=code, trade_date=date(2026, 4, 27), main_net_inflow=2_000_000),
+            MoneyFlow(
+                code=code,
+                trade_date=end_date - timedelta(days=days - i - 1),
+                main_net_inflow=1_000_000 + i * 500_000,
+            )
+            for i in range(days)
         ]
 
 
