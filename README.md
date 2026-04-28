@@ -71,6 +71,12 @@ python3 tests/test_e2e.py
 bash scripts/start_web.sh
 ```
 
+如果本地默认端口已被占用，并且你希望脚本自动释放占用端口后再启动：
+
+```bash
+START_WEB_KILL_ON_PORT_CONFLICT=1 bash scripts/start_web.sh
+```
+
 停止服务：
 
 ```bash

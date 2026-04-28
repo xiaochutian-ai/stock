@@ -49,6 +49,34 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _hold_port_code(port: int, signal_file: Path) -> str:
+    return f"""
+import signal
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+signal_file = Path(r"{signal_file}")
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"busy")
+
+    def log_message(self, format, *args):
+        return
+
+def on_term(signum, frame):
+    signal_file.write_text("TERM", encoding="utf-8")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, on_term)
+server = HTTPServer(("127.0.0.1", {port}), Handler)
+server.serve_forever()
+"""
+
+
 def test_start_web_script_exists_and_has_valid_bash_syntax():
     for script_name in ("start_web.sh", "stop_web.sh", "restart_web.sh"):
         script_path = Path("scripts") / script_name
@@ -186,3 +214,69 @@ def test_stop_web_script_uses_pid_file_to_stop_services(tmp_path: Path):
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
             process.wait(timeout=10)
+
+
+def test_start_web_script_can_kill_port_conflicts_when_enabled(tmp_path: Path):
+    script_path = Path("scripts/start_web.sh")
+    state_dir = tmp_path / "run"
+    backend_port = _free_port()
+    frontend_port = _free_port()
+    backend_signal = tmp_path / "backend.signal"
+    frontend_signal = tmp_path / "frontend.signal"
+    holder_signal = tmp_path / "holder.signal"
+
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _hold_port_code(backend_port, holder_signal)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        preexec_fn=os.setsid,
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "START_WEB_SKIP_INSTALL": "1",
+            "START_WEB_STATE_DIR": str(state_dir),
+            "START_WEB_KILL_ON_PORT_CONFLICT": "1",
+            "START_WEB_BACKEND_URL": f"http://127.0.0.1:{backend_port}",
+            "START_WEB_FRONTEND_URL": f"http://127.0.0.1:{frontend_port}",
+            "START_WEB_BACKEND_CMD": (
+                f"{sys.executable} -c '{_server_code(backend_port, backend_signal)}'"
+            ),
+            "START_WEB_FRONTEND_CMD": (
+                f"{sys.executable} -c '{_server_code(frontend_port, frontend_signal)}'"
+            ),
+        }
+    )
+
+    process = subprocess.Popen(
+        ["bash", str(script_path)],
+        cwd=Path.cwd(),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        preexec_fn=os.setsid,
+    )
+    try:
+        deadline = time.time() + 20
+        output = ""
+        while time.time() < deadline:
+            line = process.stdout.readline()
+            if line:
+                output += line
+            if "Web 工作台已启动" in output:
+                break
+        else:
+            raise AssertionError(f"script did not become ready, output:\n{output}")
+
+        assert process.poll() is None
+        assert holder.wait(timeout=10) == 0
+        assert holder_signal.read_text(encoding="utf-8") == "TERM"
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
+        if holder.poll() is None:
+            os.killpg(holder.pid, signal.SIGTERM)
+            holder.wait(timeout=10)

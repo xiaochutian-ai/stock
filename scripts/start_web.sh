@@ -10,6 +10,7 @@ PID_FILE="${STATE_DIR}/web.pid"
 BACKEND_URL="${START_WEB_BACKEND_URL:-http://127.0.0.1:8000}"
 FRONTEND_URL="${START_WEB_FRONTEND_URL:-http://127.0.0.1:5173}"
 SKIP_INSTALL="${START_WEB_SKIP_INSTALL:-0}"
+KILL_ON_PORT_CONFLICT="${START_WEB_KILL_ON_PORT_CONFLICT:-0}"
 BACKEND_PID=""
 FRONTEND_PID=""
 BACKEND_HOST=""
@@ -106,6 +107,92 @@ PY
   exit 1
 }
 
+port_pid() {
+  local port="$1"
+  lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | head -n 1
+}
+
+port_is_available() {
+  local host="$1"
+  local port="$2"
+
+  python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.socket() as sock:
+    sock.settimeout(0.5)
+    if sock.connect_ex((host, port)) == 0:
+        raise SystemExit(1)
+PY
+}
+
+kill_process_group() {
+  local pid="$1"
+  local name="$2"
+  local host="$3"
+  local port="$4"
+
+  if [[ -z "${pid}" ]]; then
+    return 0
+  fi
+
+  if kill -0 "${pid}" >/dev/null 2>&1; then
+    echo "释放${name}端口，占用进程: ${pid}"
+    kill -TERM "-${pid}" >/dev/null 2>&1 || kill -TERM "${pid}" >/dev/null 2>&1 || true
+
+    for _ in $(seq 1 20); do
+      if port_is_available "${host}" "${port}"; then
+        return 0
+      fi
+      sleep 0.5
+    done
+  fi
+
+  echo "无法释放${name}端口，占用进程仍在运行: ${pid}" >&2
+  exit 1
+}
+
+ensure_port_ready() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+  local pid
+
+  if python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+with socket.socket() as sock:
+    sock.settimeout(0.5)
+    if sock.connect_ex((host, port)) == 0:
+        raise SystemExit(1)
+PY
+  then
+    return 0
+  fi
+
+  if [[ "${KILL_ON_PORT_CONFLICT}" != "1" ]]; then
+    echo "${name} 端口已被占用: ${host}:${port}" >&2
+    exit 1
+  fi
+
+  pid="$(port_pid "${port}")"
+  if [[ -z "${pid}" ]]; then
+    echo "${name} 端口已被占用，但未找到监听进程: ${host}:${port}" >&2
+    exit 1
+  fi
+
+  kill_process_group "${pid}" "${name}" "${host}" "${port}"
+  ensure_port_available "${host}" "${port}" "${name}"
+}
+
 monitor_processes() {
   while true; do
     if ! kill -0 "${BACKEND_PID}" >/dev/null 2>&1; then
@@ -180,6 +267,7 @@ main() {
   require_command python3
   require_command npm
   require_command curl
+  require_command lsof
 
   cd "${ROOT_DIR}"
   BACKEND_HOST="$(url_field "${BACKEND_URL}" host)"
@@ -187,8 +275,8 @@ main() {
   FRONTEND_HOST="$(url_field "${FRONTEND_URL}" host)"
   FRONTEND_PORT="$(url_field "${FRONTEND_URL}" port)"
 
-  ensure_port_available "${BACKEND_HOST}" "${BACKEND_PORT}" "后端"
-  ensure_port_available "${FRONTEND_HOST}" "${FRONTEND_PORT}" "前端"
+  ensure_port_ready "${BACKEND_HOST}" "${BACKEND_PORT}" "后端"
+  ensure_port_ready "${FRONTEND_HOST}" "${FRONTEND_PORT}" "前端"
 
   if [[ "${SKIP_INSTALL}" != "1" ]]; then
     if [[ ! -d "${VENV_DIR}" ]]; then
