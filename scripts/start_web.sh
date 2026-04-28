@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${ROOT_DIR}/.venv"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
+STATE_DIR="${START_WEB_STATE_DIR:-${ROOT_DIR}/.run}"
+PID_FILE="${STATE_DIR}/web.pid"
 BACKEND_URL="${START_WEB_BACKEND_URL:-http://127.0.0.1:8000}"
 FRONTEND_URL="${START_WEB_FRONTEND_URL:-http://127.0.0.1:5173}"
 SKIP_INSTALL="${START_WEB_SKIP_INSTALL:-0}"
@@ -45,6 +47,7 @@ PY
 
 cleanup() {
   trap - EXIT INT TERM
+  rm -f "${PID_FILE}"
 
   if [[ -n "${BACKEND_PID}" ]]; then
     kill -TERM "-${BACKEND_PID}" >/dev/null 2>&1 || true
@@ -115,6 +118,16 @@ monitor_processes() {
     fi
     sleep 1
   done
+}
+
+write_pid_file() {
+  mkdir -p "${STATE_DIR}"
+  cat >"${PID_FILE}" <<EOF
+BACKEND_PID='${BACKEND_PID}'
+FRONTEND_PID='${FRONTEND_PID}'
+BACKEND_URL='${BACKEND_URL}'
+FRONTEND_URL='${FRONTEND_URL}'
+EOF
 }
 
 start_backend() {
@@ -210,6 +223,7 @@ main() {
 
   wait_for_url "${BACKEND_URL}/docs" "后端 API"
   wait_for_url "${FRONTEND_URL}" "前端页面"
+  write_pid_file
 
   cat <<EOF
 

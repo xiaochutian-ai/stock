@@ -71,6 +71,18 @@ python3 tests/test_e2e.py
 bash scripts/start_web.sh
 ```
 
+停止服务：
+
+```bash
+bash scripts/stop_web.sh
+```
+
+重启服务：
+
+```bash
+bash scripts/restart_web.sh
+```
+
 脚本会自动完成以下步骤：
 
 - 创建或复用 `.venv`
@@ -78,11 +90,13 @@ bash scripts/start_web.sh
 - 安装前端依赖 `frontend/npm install`
 - 启动后端 `http://127.0.0.1:8000`
 - 启动前端 `http://127.0.0.1:5173`
+- 在 `.run/web.pid` 中记录前后端进程信息，供停止/重启脚本复用
 
 停止方式：
 
 - 在脚本所在终端按 `Ctrl+C`
 - 脚本会同时停止前后端进程
+- 或执行 `bash scripts/stop_web.sh`
 
 ### 开发启动
 

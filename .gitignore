@@ -221,6 +221,9 @@ frontend/*.tsbuildinfo
 # Visual companion output
 .superpowers/
 
+# Local runtime state
+.run/
+
 # 敏感信息 / 密钥（防止意外入库）
 *.pem
 *.key
