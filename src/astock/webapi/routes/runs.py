@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Request, status
 
 from astock.webapi.schemas import RunCreateRequest, RunCreateResponse
@@ -32,6 +34,22 @@ def create_run_endpoint(request: Request, payload: RunCreateRequest) -> RunCreat
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
+    snapshot = request.app.state.run_cache[result["run_id"]]
+    summary = {
+        "result_count": snapshot["result_count"],
+        "top_codes": [item["code"] for item in snapshot["results"][:5]],
+    }
+    request.app.state.history_store.save_run(
+        {
+            "run_id": result["run_id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": result["status"],
+            "params": snapshot["params"],
+            "summary": summary,
+            "results": snapshot["results"],
+            "details": snapshot["details"],
+        }
+    )
     return RunCreateResponse(**result)
 
 

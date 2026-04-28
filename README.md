@@ -61,6 +61,78 @@ astock list-strategies     # 可用策略
 python3 tests/test_e2e.py
 ```
 
+## Web 工作台
+
+### 开发启动
+
+后端和前端是分离维护的两个开发进程：
+
+- 后端：FastAPI，默认地址 `http://localhost:8000`
+- 前端：Vite + React + TypeScript，默认地址 `http://localhost:5173`
+
+### 1. 启动后端 API
+
+先在项目根目录安装 Python 依赖：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+然后启动 Web API：
+
+```bash
+python3 - <<'PY'
+from astock.config import load_settings
+from astock.webapi.app import create_app
+import uvicorn
+
+app = create_app(load_settings())
+uvicorn.run(app, host="127.0.0.1", port=8000)
+PY
+```
+
+说明：
+
+- 默认读取 `config/default.yaml`
+- 若需切换配置文件，可先设置 `ASTOCK_CONFIG=/path/to/config.yaml`
+- 当前 `create_app()` 需要显式注入 `Settings`，因此这里使用 Python 启动脚本而不是直接执行 `uvicorn astock.webapi.app:create_app --factory`
+
+### 2. 启动前端
+
+另开一个终端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+启动后可在浏览器访问：
+
+- 前端页面：`http://localhost:5173`
+- 后端 API：`http://localhost:8000`
+- OpenAPI 文档：`http://localhost:8000/docs`
+
+### 3. 本地验证
+
+后端验证：
+
+```bash
+PYTHONPATH=src pytest tests/webapi -q
+python3 tests/test_e2e.py
+ruff check src/ tests/
+```
+
+前端验证：
+
+```bash
+cd frontend
+npm test
+npm run build
+```
+
 ## 配置说明
 
 默认配置文件：[`config/default.yaml`](config/default.yaml)
@@ -118,8 +190,11 @@ stock/
 │   ├── engine/              # 选股引擎（编排流水线）
 │   ├── config/              # YAML 配置加载
 │   ├── output/              # 控制台 / CSV / Excel / JSON
+│   ├── webapi/              # FastAPI Web API（meta / runs / history）
 │   └── cli.py               # typer CLI 入口
+├── frontend/                # React + Vite Web 前端
 └── tests/
+    ├── webapi/              # Web API 测试
     └── test_e2e.py          # 端到端 Mock 测试
 ```
 

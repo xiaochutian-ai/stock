@@ -213,6 +213,14 @@ _scratch/
 _patch_*.py
 .worktrees/
 
+# Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Visual companion output
+.superpowers/
+
 # 敏感信息 / 密钥（防止意外入库）
 *.pem
 *.key
