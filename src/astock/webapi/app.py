@@ -9,6 +9,7 @@ from astock.config import Settings
 from astock.datasource.base import DataProvider
 from astock.storage.base import Repository
 from astock.webapi.routes.meta import router as meta_router
+from astock.webapi.routes.runs import router as runs_router
 
 
 def create_app(
@@ -28,4 +29,5 @@ def create_app(
     app.state.history_db_path = Path(history_db_path)
     app.state.run_cache = {}
     app.include_router(meta_router)
+    app.include_router(runs_router)
     return app
