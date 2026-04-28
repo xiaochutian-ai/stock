@@ -51,13 +51,21 @@ def test_create_run_maps_expected_domain_errors_to_bad_request(client):
     assert "未配置任何启用的策略" in response.text
 
 
-def test_create_run_only_stores_metadata_in_run_cache(client):
+def test_create_run_stores_results_and_details_snapshot_in_run_cache(client):
     response = client.post("/api/runs", json=_run_payload())
 
     assert response.status_code == 200
     run_id = response.json()["run_id"]
     snapshot = client.app.state.run_cache[run_id]
 
-    assert "results" not in snapshot
     assert snapshot["status"] == "succeeded"
     assert snapshot["result_count"] == response.json()["result_count"]
+    assert snapshot["results"]
+    assert len(snapshot["results"]) == snapshot["result_count"]
+
+    first_code = snapshot["results"][0]["code"]
+    assert first_code in snapshot["details"]
+    detail = snapshot["details"][first_code]
+    assert detail["stock"]["code"] == first_code
+    assert "strategies" in detail
+    assert "kline" in detail
