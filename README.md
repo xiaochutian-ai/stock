@@ -63,6 +63,27 @@ python3 tests/test_e2e.py
 
 ## Web 工作台
 
+### 一键启动
+
+在项目根目录执行：
+
+```bash
+bash scripts/start_web.sh
+```
+
+脚本会自动完成以下步骤：
+
+- 创建或复用 `.venv`
+- 安装 Python 依赖 `pip install -e ".[dev]"`
+- 安装前端依赖 `frontend/npm install`
+- 启动后端 `http://127.0.0.1:8000`
+- 启动前端 `http://127.0.0.1:5173`
+
+停止方式：
+
+- 在脚本所在终端按 `Ctrl+C`
+- 脚本会同时停止前后端进程
+
 ### 开发启动
 
 后端和前端是分离维护的两个开发进程：
