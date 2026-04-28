@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 
 def _run_payload():
     return {
@@ -19,11 +21,22 @@ def _run_payload():
     }
 
 
+def _wait_for_history_snapshot(client, run_id: str, timeout: float = 5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        snapshot = client.app.state.run_cache[run_id]
+        if snapshot["status"] == "succeeded":
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} did not complete")
+
+
 def test_history_endpoints_return_saved_run_snapshots(client):
     create_response = client.post("/api/runs", json=_run_payload())
 
     assert create_response.status_code == 200
     run_id = create_response.json()["run_id"]
+    _wait_for_history_snapshot(client, run_id)
 
     list_response = client.get("/api/history")
     assert list_response.status_code == 200

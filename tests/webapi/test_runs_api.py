@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 
@@ -26,20 +28,34 @@ def run_payload():
     return _run_payload()
 
 
-def test_create_run_returns_run_id_and_succeeded_status(client, run_payload):
+def _wait_for_terminal_snapshot(client, run_id: str, timeout: float = 5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        snapshot = client.app.state.run_cache[run_id]
+        if snapshot["status"] in {"succeeded", "failed", "cancelled"}:
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} did not reach terminal state")
+
+
+def test_create_run_returns_run_id_and_async_status(client, run_payload):
     response = client.post("/api/runs", json=run_payload)
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "succeeded"
-    assert payload["result_count"] >= 1
     assert payload["run_id"]
+    assert payload["status"] in {"pending", "running", "succeeded"}
+
+    snapshot = _wait_for_terminal_snapshot(client, payload["run_id"])
+    assert snapshot["status"] == "succeeded"
+    assert snapshot["result_count"] >= 1
 
 
 def test_result_list_and_detail_are_available_after_run(client, run_payload):
     create_response = client.post("/api/runs", json=run_payload)
     assert create_response.status_code == 200
     run_id = create_response.json()["run_id"]
+    _wait_for_terminal_snapshot(client, run_id)
 
     list_response = client.get(f"/api/runs/{run_id}/results")
     assert list_response.status_code == 200

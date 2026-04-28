@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -28,6 +28,10 @@ from ..storage import Repository, get_repository
 from ..strategy import Strategy, StrategyContext, get_strategy
 
 logger = logging.getLogger(__name__)
+
+
+class RunCancelledError(RuntimeError):
+    """Raised when a screening run is cancelled."""
 
 
 class ScreeningEngine:
@@ -41,8 +45,10 @@ class ScreeningEngine:
         settings: Settings,
         provider: Optional[DataProvider] = None,
         repository: Optional[Repository] = None,
+        cancel_checker: Optional[Callable[[], bool]] = None,
     ):
         self.settings = settings
+        self.cancel_checker = cancel_checker or (lambda: False)
 
         # 数据源（依赖注入，便于测试）
         if provider is None:
@@ -96,15 +102,18 @@ class ScreeningEngine:
             按综合分数降序排列的结果列表（每项为 dict）
         """
         # 0) 确保存储就绪（幂等）
+        self._check_cancelled()
         self._ensure_schema()
 
         # 1) 股票池
+        self._check_cancelled()
         stocks = self._prepare_universe(limit=limit)
         if not stocks:
             logger.warning("股票池为空")
             return []
 
         # 2) 批量财务
+        self._check_cancelled()
         financials_map = self._fetch_and_persist_financials(stocks)
 
         # 3) 逐只评估
@@ -117,6 +126,7 @@ class ScreeningEngine:
         mf_days = self._max_money_flow_days() if need_money else 0
 
         for stock in tqdm(stocks, desc="选股评估", ncols=80):
+            self._check_cancelled()
             item = self._process_single_stock(
                 stock=stock,
                 financial=financials_map.get(stock.code),
@@ -144,15 +154,18 @@ class ScreeningEngine:
         返回值用于 Web API 的 run snapshot 缓存：后续查询只读快照，不再重跑引擎。
         """
         # 0) 确保存储就绪（幂等）
+        self._check_cancelled()
         self._ensure_schema()
 
         # 1) 股票池
+        self._check_cancelled()
         stocks = self._prepare_universe(limit=limit)
         if not stocks:
             logger.warning("股票池为空")
             return [], {}
 
         # 2) 批量财务
+        self._check_cancelled()
         financials_map = self._fetch_and_persist_financials(stocks)
 
         # 3) 逐只评估（同时输出策略细节与 K 线 payload）
@@ -166,6 +179,7 @@ class ScreeningEngine:
         mf_days = self._max_money_flow_days() if need_money else 0
 
         for stock in tqdm(stocks, desc="选股评估", ncols=80):
+            self._check_cancelled()
             ctx = self._build_context(
                 stock=stock,
                 financial=financials_map.get(stock.code),
@@ -206,6 +220,7 @@ class ScreeningEngine:
         失败时记录警告并返回空映射，不打断后续流程。
         """
         try:
+            self._check_cancelled()
             fins = self.provider.get_financials_batch([s.code for s in stocks])
         except Exception as e:
             logger.warning("批量拉取财务失败: %s", e)
@@ -261,6 +276,7 @@ class ScreeningEngine:
 
         if need_kline:
             try:
+                self._check_cancelled()
                 kline = self.provider.get_kline(
                     stock.code, start=kline_start, end=kline_end, adjust="qfq"
                 )
@@ -271,6 +287,7 @@ class ScreeningEngine:
 
         if need_money:
             try:
+                self._check_cancelled()
                 money_flows = self.provider.get_money_flow(stock.code, days=mf_days)
                 if money_flows:
                     self.repository.upsert_money_flows(money_flows)
@@ -301,6 +318,7 @@ class ScreeningEngine:
         today = date.today()
         filtered: List[Stock] = []
         for s in stocks:
+            self._check_cancelled()
             if exclude_st and s.is_st:
                 continue
             if boards and s.board.value not in boards:
@@ -340,6 +358,7 @@ class ScreeningEngine:
         strategies_payload: List[dict] = []
 
         for strat in self.strategies:
+            self._check_cancelled()
             res = strat.evaluate(ctx)
             strategies_payload.append(
                 {
@@ -398,3 +417,7 @@ class ScreeningEngine:
             if s.name == "money_flow":
                 days = max(days, int(s.params.get("main_inflow_days", 0) or 0), 5)
         return days
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_checker():
+            raise RunCancelledError("run cancelled")

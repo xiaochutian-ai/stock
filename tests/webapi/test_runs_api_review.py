@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import threading
+import time
+from pathlib import Path
+
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
+
+from astock.config import Settings
+from astock.datasource.base import DataProvider
+from astock.models import Board, Financial, KLine, MoneyFlow, Stock
 
 def _run_payload():
     return {
@@ -19,6 +28,16 @@ def _run_payload():
             },
         ],
     }
+
+
+def _wait_for_terminal_snapshot(client, run_id: str, timeout: float = 5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        snapshot = client.app.state.run_cache[run_id]
+        if snapshot["status"] in {"succeeded", "failed", "cancelled"}:
+            return snapshot
+        time.sleep(0.05)
+    raise AssertionError(f"run {run_id} did not reach terminal state")
 
 
 @pytest.mark.parametrize(
@@ -48,7 +67,7 @@ def test_create_run_maps_expected_domain_errors_to_bad_request(client):
     response = non_raising_client.post("/api/runs", json=payload)
 
     assert response.status_code == 400
-    assert "未配置任何启用的策略" in response.text
+    assert "Unknown strategy" in response.text
 
 
 def test_create_run_stores_results_and_details_snapshot_in_run_cache(client):
@@ -56,10 +75,9 @@ def test_create_run_stores_results_and_details_snapshot_in_run_cache(client):
 
     assert response.status_code == 200
     run_id = response.json()["run_id"]
-    snapshot = client.app.state.run_cache[run_id]
+    snapshot = _wait_for_terminal_snapshot(client, run_id)
 
     assert snapshot["status"] == "succeeded"
-    assert snapshot["result_count"] == response.json()["result_count"]
     assert snapshot["results"]
     assert len(snapshot["results"]) == snapshot["result_count"]
 
@@ -69,3 +87,63 @@ def test_create_run_stores_results_and_details_snapshot_in_run_cache(client):
     assert detail["stock"]["code"] == first_code
     assert "strategies" in detail
     assert "kline" in detail
+
+
+class SlowShutdownProvider(DataProvider):
+    name = "slow-shutdown"
+
+    def __init__(self):
+        self.block_event = threading.Event()
+
+    def list_stocks(self):
+        return [Stock(code="600519", name="贵州茅台", board=Board.MAIN_BOARD)]
+
+    def get_kline(self, code, start=None, end=None, adjust="qfq"):
+        _ = (code, start, end, adjust)
+        self.block_event.wait(timeout=5)
+        index = pd.date_range(start="2026-04-20", periods=5, freq="B")
+        df = pd.DataFrame(
+            {
+                "open": [10, 11, 12, 13, 14],
+                "high": [11, 12, 13, 14, 15],
+                "low": [9, 10, 11, 12, 13],
+                "close": [10.5, 11.5, 12.5, 13.5, 14.5],
+                "volume": [1000, 1100, 1200, 1300, 1400],
+                "amount": [10500, 12650, 15000, 17550, 20300],
+                "pct_change": [0.0, 1.0, 1.0, 1.0, 1.0],
+                "turnover_rate": [1, 1, 1, 1, 1],
+            },
+            index=index,
+        )
+        df.index.name = "date"
+        return KLine(code=code, df=df)
+
+    def get_financial(self, code: str):
+        return Financial(code=code, pe_ttm=20.0, pb=2.0, roe=0.15)
+
+    def get_financials_batch(self, codes):
+        return [Financial(code=code, pe_ttm=20.0, pb=2.0, roe=0.15) for code in codes]
+
+    def get_money_flow(self, code: str, days: int = 5):
+        return [
+            MoneyFlow(code=code, trade_date=pd.Timestamp("2026-04-27").date(), main_net_inflow=2_000_000)
+            for _ in range(days)
+        ]
+
+
+def test_shutdown_cancels_inflight_runs(web_settings: Settings, tmp_path: Path):
+    from astock.webapi.app import create_app
+
+    provider = SlowShutdownProvider()
+    history_path = tmp_path / "web_history.db"
+    app = create_app(settings=web_settings, provider=provider, history_db_path=str(history_path))
+
+    with TestClient(app) as client:
+        response = client.post("/api/runs", json=_run_payload())
+        assert response.status_code == 200
+        run_id = response.json()["run_id"]
+        time.sleep(0.1)
+        assert client.app.state.run_cache[run_id]["status"] in {"pending", "running"}
+
+    snapshot = app.state.run_cache[run_id]
+    assert snapshot["status"] == "cancelled"
