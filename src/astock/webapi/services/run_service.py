@@ -16,13 +16,14 @@ def create_run(
     repository: Any = None,
     run_cache: Dict[str, Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
+    strategy_configs = [item.model_dump() for item in request.strategies]
     output = dict(base_settings.output)
     if request.output.min_score is not None:
         output["min_score"] = request.output.min_score
 
     run_settings = replace(
         base_settings,
-        strategies=[item.model_dump() for item in request.strategies] or base_settings.strategies,
+        strategies=strategy_configs or base_settings.strategies,
         output=output,
     )
     engine = ScreeningEngine(
@@ -41,6 +42,12 @@ def create_run(
     if run_cache is not None:
         run_cache[run_id] = {
             "status": payload["status"],
-            "results": results,
+            "result_count": payload["result_count"],
+            "params": {
+                "limit": request.limit,
+                "kline_days": request.kline_days,
+                "output": {"min_score": request.output.min_score},
+                "strategies": strategy_configs,
+            },
         }
     return payload
