@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tqdm import tqdm
 
@@ -28,6 +28,10 @@ from ..storage import Repository, get_repository
 from ..strategy import Strategy, StrategyContext, get_strategy
 
 logger = logging.getLogger(__name__)
+
+
+class RunCancelledError(RuntimeError):
+    """Raised when a screening run is cancelled."""
 
 
 class ScreeningEngine:
@@ -41,8 +45,10 @@ class ScreeningEngine:
         settings: Settings,
         provider: Optional[DataProvider] = None,
         repository: Optional[Repository] = None,
+        cancel_checker: Optional[Callable[[], bool]] = None,
     ):
         self.settings = settings
+        self.cancel_checker = cancel_checker or (lambda: False)
 
         # 数据源（依赖注入，便于测试）
         if provider is None:
@@ -96,15 +102,18 @@ class ScreeningEngine:
             按综合分数降序排列的结果列表（每项为 dict）
         """
         # 0) 确保存储就绪（幂等）
+        self._check_cancelled()
         self._ensure_schema()
 
         # 1) 股票池
+        self._check_cancelled()
         stocks = self._prepare_universe(limit=limit)
         if not stocks:
             logger.warning("股票池为空")
             return []
 
         # 2) 批量财务
+        self._check_cancelled()
         financials_map = self._fetch_and_persist_financials(stocks)
 
         # 3) 逐只评估
@@ -117,6 +126,7 @@ class ScreeningEngine:
         mf_days = self._max_money_flow_days() if need_money else 0
 
         for stock in tqdm(stocks, desc="选股评估", ncols=80):
+            self._check_cancelled()
             item = self._process_single_stock(
                 stock=stock,
                 financial=financials_map.get(stock.code),
@@ -136,6 +146,66 @@ class ScreeningEngine:
         logger.info("选股完成：通过 %d 只", len(results))
         return results
 
+    def run_with_details(
+        self, limit: Optional[int] = None, kline_days: int = 120
+    ) -> Tuple[List[dict], Dict[str, dict]]:
+        """执行选股流程，并为每只通过的股票生成 detail 快照。
+
+        返回值用于 Web API 的 run snapshot 缓存：后续查询只读快照，不再重跑引擎。
+        """
+        # 0) 确保存储就绪（幂等）
+        self._check_cancelled()
+        self._ensure_schema()
+
+        # 1) 股票池
+        self._check_cancelled()
+        stocks = self._prepare_universe(limit=limit)
+        if not stocks:
+            logger.warning("股票池为空")
+            return [], {}
+
+        # 2) 批量财务
+        self._check_cancelled()
+        financials_map = self._fetch_and_persist_financials(stocks)
+
+        # 3) 逐只评估（同时输出策略细节与 K 线 payload）
+        end = date.today()
+        start = end - timedelta(days=kline_days * 2)  # 留足交易日
+
+        results: List[dict] = []
+        details: Dict[str, dict] = {}
+        need_kline = self._need_kline()
+        need_money = self._need_money_flow()
+        mf_days = self._max_money_flow_days() if need_money else 0
+
+        for stock in tqdm(stocks, desc="选股评估", ncols=80):
+            self._check_cancelled()
+            ctx = self._build_context(
+                stock=stock,
+                financial=financials_map.get(stock.code),
+                need_kline=need_kline,
+                need_money=need_money,
+                kline_start=start,
+                kline_end=end,
+                mf_days=mf_days,
+            )
+            summary, strategies_payload = self._evaluate_one_with_details(ctx)
+            if summary is None:
+                continue
+            results.append(summary)
+            details[stock.code] = {
+                "stock": {"code": stock.code, "name": stock.name, "board": stock.board.value},
+                "strategies": strategies_payload,
+                "kline": self._kline_to_payload(ctx.kline, tail=kline_days),
+            }
+
+        # 4) 综合打分排序
+        results.sort(key=lambda x: x.get("total_score", 0.0), reverse=True)
+        for i, item in enumerate(results, start=1):
+            item["rank"] = i
+        logger.info("选股完成：通过 %d 只", len(results))
+        return results, details
+
     # ---------------- 子步骤 ----------------
     def _ensure_schema(self) -> None:
         """幂等初始化存储 schema（首次 run() 时建表）。"""
@@ -150,6 +220,7 @@ class ScreeningEngine:
         失败时记录警告并返回空映射，不打断后续流程。
         """
         try:
+            self._check_cancelled()
             fins = self.provider.get_financials_batch([s.code for s in stocks])
         except Exception as e:
             logger.warning("批量拉取财务失败: %s", e)
@@ -177,11 +248,35 @@ class ScreeningEngine:
 
         所有网络/IO 异常都在此吞掉（返回 None），不影响批量评估。
         """
+        ctx = self._build_context(
+            stock=stock,
+            financial=financial,
+            need_kline=need_kline,
+            need_money=need_money,
+            kline_start=kline_start,
+            kline_end=kline_end,
+            mf_days=mf_days,
+        )
+        return self._evaluate_one(ctx)
+
+    def _build_context(
+        self,
+        *,
+        stock: Stock,
+        financial,
+        need_kline: bool,
+        need_money: bool,
+        kline_start: date,
+        kline_end: date,
+        mf_days: int,
+    ) -> StrategyContext:
+        """拉取数据并组装 StrategyContext（容错，不抛出到上层）。"""
         kline = None
         money_flows: list = []
 
         if need_kline:
             try:
+                self._check_cancelled()
                 kline = self.provider.get_kline(
                     stock.code, start=kline_start, end=kline_end, adjust="qfq"
                 )
@@ -192,19 +287,19 @@ class ScreeningEngine:
 
         if need_money:
             try:
+                self._check_cancelled()
                 money_flows = self.provider.get_money_flow(stock.code, days=mf_days)
                 if money_flows:
                     self.repository.upsert_money_flows(money_flows)
             except Exception as e:
                 logger.debug("资金流拉取失败 %s: %s", stock.code, e)
 
-        ctx = StrategyContext(
+        return StrategyContext(
             stock=stock,
             kline=kline,
             financial=financial,
             money_flows=money_flows,
         )
-        return self._evaluate_one(ctx)
 
     def _prepare_universe(self, limit: Optional[int]) -> List[Stock]:
         """准备候选股票池（含市场、ST、次新过滤）。"""
@@ -223,6 +318,7 @@ class ScreeningEngine:
         today = date.today()
         filtered: List[Stock] = []
         for s in stocks:
+            self._check_cancelled()
             if exclude_st and s.is_st:
                 continue
             if boards and s.board.value not in boards:
@@ -242,6 +338,10 @@ class ScreeningEngine:
         return filtered
 
     def _evaluate_one(self, ctx: StrategyContext) -> Optional[dict]:
+        summary, _ = self._evaluate_one_with_details(ctx)
+        return summary
+
+    def _evaluate_one_with_details(self, ctx: StrategyContext) -> Tuple[Optional[dict], List[dict]]:
         """对单只股票跑所有策略，综合加权得分。
 
         语义：
@@ -255,9 +355,20 @@ class ScreeningEngine:
         reasons = []
         any_passed = False
         detail_scores = {}
+        strategies_payload: List[dict] = []
 
         for strat in self.strategies:
+            self._check_cancelled()
             res = strat.evaluate(ctx)
+            strategies_payload.append(
+                {
+                    "name": strat.name,
+                    "passed": bool(res.passed),
+                    "score": float(res.score),
+                    "reason": res.reason,
+                    "details": dict(res.details or {}),
+                }
+            )
             if res.passed:
                 any_passed = True
             total_score += res.score * strat.weight
@@ -268,20 +379,34 @@ class ScreeningEngine:
         min_score = float(self.settings.output.get("min_score", 0.5))
 
         if not any_passed or normalized_score < min_score:
-            return None
+            return None, strategies_payload
 
-        return {
+        return (
+            {
             "code": ctx.stock.code,
             "name": ctx.stock.name,
             "board": ctx.stock.board.value,
             "total_score": round(normalized_score, 4),
             **{f"score_{k}": round(v, 4) for k, v in detail_scores.items()},
             "reasons": " | ".join(reasons),
-        }
+            },
+            strategies_payload,
+        )
 
     # ---------------- 辅助 ----------------
     def _need_kline(self) -> bool:
         return any(s.name in ("technical",) for s in self.strategies)
+
+    def _kline_to_payload(self, kline: Any, tail: int = 120) -> Any:
+        if kline is None or getattr(kline, "df", None) is None:
+            return None
+        df = kline.df.copy()
+        # Ensure json-serializable "date" column.
+        df = df.reset_index().rename(columns={"index": "date"})
+        df["date"] = df["date"].astype(str)
+        if tail and tail > 0:
+            df = df.tail(tail)
+        return {"code": getattr(kline, "code", ""), "items": df.to_dict(orient="records")}
 
     def _need_money_flow(self) -> bool:
         return any(s.name == "money_flow" for s in self.strategies)
@@ -292,3 +417,7 @@ class ScreeningEngine:
             if s.name == "money_flow":
                 days = max(days, int(s.params.get("main_inflow_days", 0) or 0), 5)
         return days
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_checker():
+            raise RunCancelledError("run cancelled")
